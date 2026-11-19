@@ -330,8 +330,35 @@ void AirportItlwmSkywalkInterface::publishWCLBeacon(const ieee80211_node *node, 
     metadata->capability = node->ni_capinfo;
     metadata->flags = AirportWCL::SSIDPresent | AirportWCL::RSSIValid;
     memcpy(metadata + 1, ies, length);
+    int transition = AirportWCL::TransitionNone;
     metadata->ieLength = uint32_t(AirportWCL::selectWPA2TransitionMode(
-        reinterpret_cast<uint8_t *>(metadata + 1), length));
+        reinterpret_cast<uint8_t *>(metadata + 1), length, &transition));
+    // PEM: log each WPA3-capable BSS once (per 64 BSS ring) with the raw RSN
+    // element and the decision, so mixed-mode problems can be diagnosed.
+    if (transition != AirportWCL::TransitionNone) {
+        static uint8_t seen[64][6];
+        static unsigned seenNext = 0;
+        bool logged = false;
+        for (unsigned k = 0; k < 64; ++k)
+            if (memcmp(seen[k], node->ni_bssid, 6) == 0) { logged = true; break; }
+        if (!logged) {
+            memcpy(seen[seenNext++ % 64], node->ni_bssid, 6);
+            char hex[3 * 64 + 1] = {0};
+            for (size_t off = 0; off + 2 <= length; off += size_t(ies[off + 1]) + 2) {
+                if (ies[off] != 48) continue;
+                size_t n = size_t(ies[off + 1]) + 2; if (n > 64) n = 64;
+                for (size_t b = 0; b < n; ++b)
+                    snprintf(hex + 3 * b, 4, "%02x ", ies[off + b]);
+                break;
+            }
+            char ssid[33] = {0};
+            memcpy(ssid, node->ni_essid, node->ni_esslen > 32 ? 32 : node->ni_esslen);
+            static const char *names[] = {"none", "CONVERTED to WPA2", "PMF REQUIRED (left WPA3)", "NO PSK (left WPA3)", "MALFORMED"};
+            XYLog("PEM-WPA3 ssid=%s bssid=%s ch=%u result=%s rsn=%s\n", ssid,
+                  ether_sprintf(node->ni_bssid), channel,
+                  names[(transition >= 0 && transition <= 4) ? transition : 0], hex);
+        }
+    }
     size_t messageSize = sizeof(*metadata) + metadata->ieLength;
     if (assocNotified && IEEE80211_ADDR_EQ(node->ni_bssid, joinBSSID)) {
         wclBssValid = messageSize <= sizeof(wclBssInfo);

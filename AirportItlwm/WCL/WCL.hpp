@@ -340,7 +340,29 @@ inline bool scanUsesProbes(bool requested, bool activeRequest) {
 // This operates on the scan-message copy, never the received beacon or the
 // net80211 RSN IE used to validate the four-way handshake. SAE-only, mandatory
 // PMF and other AKM combinations must not be converted into WPA2 networks.
-inline size_t selectWPA2TransitionMode(uint8_t *ies, size_t length) {
+// PEM: reasons reported by selectWPA2TransitionMode for diagnostics.
+enum TransitionResult : int {
+    TransitionNone = 0,          // no RSN / no SAE offered: nothing to do
+    TransitionConverted = 1,     // PSK+SAE network presented as WPA2-PSK
+    TransitionPMFRequired = 2,   // MFPR set: driver cannot do PMF, left as is
+    TransitionNoPSK = 3,         // SAE offered without ordinary PSK (AKM 2)
+    TransitionMalformed = 4,     // RSN element could not be parsed
+};
+
+// Present the supported PSK option of a PSK/SAE transition network to WCL.
+// This operates on the scan-message copy, never the received beacon or the
+// net80211 RSN IE used to validate the four-way handshake.
+//
+// PEM: the original version only converted networks whose AKM list was
+// exactly {PSK, PSK-SHA256, SAE, SAE-H2E} and whose RSN capabilities said
+// "PMF capable, not required". Enterprise/mesh APs commonly also advertise
+// FT-PSK / FT-SAE (802.11r) or SAE-EXT-KEY, and some mixed-mode APs do not
+// set the MFPC bit at all; such networks stayed "WPA2/WPA3" for macOS, which
+// then joined with SAE and the driver could never select the BSS.
+// Now: any network that offers ordinary PSK (AKM 2) together with an SAE
+// variant and does NOT require PMF is presented as plain WPA2-PSK.
+inline size_t selectWPA2TransitionMode(uint8_t *ies, size_t length, int *result = nullptr) {
+    if (result) *result = TransitionNone;
     if (!validIEs(ies, length))
         return length;
     bool converted = false;
@@ -349,47 +371,57 @@ inline size_t selectWPA2TransitionMode(uint8_t *ies, size_t length) {
         size_t size = size_t(ie[1]) + 2;
         if (offset + size > length)
             break;
-        if (ie[0] != 48 || size < 10 || read16(ie + 2) != 1) {
+        if (ie[0] != 48) {
+            offset += size;
+            continue;
+        }
+        if (size < 10 || read16(ie + 2) != 1) {
+            if (result) *result = TransitionMalformed;
             offset += size;
             continue;
         }
         size_t pairwiseCount = read16(ie + 8);
         if (!pairwiseCount || pairwiseCount > (size - 10) / 4) {
+            if (result) *result = TransitionMalformed;
             offset += size;
             continue;
         }
         size_t countOffset = 10 + 4 * pairwiseCount;
         if (size - countOffset < 2) {
+            if (result) *result = TransitionMalformed;
             offset += size;
             continue;
         }
         size_t count = read16(ie + countOffset);
         size_t suitesOffset = countOffset + 2;
-        if (count < 2 || count > (size - suitesOffset) / 4) {
+        if (count < 1 || count > (size - suitesOffset) / 4) {
             offset += size;
             continue;
         }
         size_t tailOffset = suitesOffset + 4 * count;
-        // PSK/SAE transition mode advertises PMF capable, but not required.
-        if (size - tailOffset < 2 || (read16(ie + tailOffset) & 0xc0) != 0x80) {
-            offset += size;
-            continue;
-        }
-        bool psk = false, sae = false, other = false;
+        bool psk = false, sae = false;
         for (size_t i = 0; i < count; ++i) {
             const uint8_t *suite = ie + suitesOffset + 4 * i;
             if (suite[0] != 0 || suite[1] != 0x0f || suite[2] != 0xac)
-                other = true;
-            else if (suite[3] == 2)
+                continue;
+            if (suite[3] == 2)
                 psk = true;
-            else if (suite[3] == 6)
-                continue; // PSK-SHA256 is recognized, but ordinary PSK is still required.
-            else if (suite[3] == 8 || suite[3] == 24)
-                sae = true;
-            else
-                other = true;
+            else if (suite[3] == 8 || suite[3] == 9 || suite[3] == 24 || suite[3] == 25)
+                sae = true;   // SAE, FT-SAE, SAE-H2E/EXT-KEY variants
         }
-        if (!psk || !sae || other) {
+        if (!sae) {
+            offset += size;
+            continue;
+        }
+        // RSN capabilities follow the AKM list; absent means 0 (no PMF).
+        uint16_t caps = (size - tailOffset >= 2) ? read16(ie + tailOffset) : 0;
+        if (caps & 0x40) {            // MFPR: PMF required -> cannot use PSK path
+            if (result) *result = TransitionPMFRequired;
+            offset += size;
+            continue;
+        }
+        if (!psk) {
+            if (result) *result = TransitionNoPSK;
             offset += size;
             continue;
         }
@@ -406,6 +438,7 @@ inline size_t selectWPA2TransitionMode(uint8_t *ies, size_t length) {
         length -= removed;
         offset += size - removed;
         converted = true;
+        if (result) *result = TransitionConverted;
     }
     if (converted) {
         for (size_t offset = 0; offset < length; ) {
