@@ -333,30 +333,46 @@ void AirportItlwmSkywalkInterface::publishWCLBeacon(const ieee80211_node *node, 
     int transition = AirportWCL::TransitionNone;
     metadata->ieLength = uint32_t(AirportWCL::selectWPA2TransitionMode(
         reinterpret_cast<uint8_t *>(metadata + 1), length, &transition));
-    // PEM: log each WPA3-capable BSS once (per 64 BSS ring) with the raw RSN
-    // element and the decision, so mixed-mode problems can be diagnosed.
+    // PEM: keep the latest decision for every WPA3-capable BSS and publish
+    // the table in IORegistry (AirportItlwm -> "PEMWPA3"), so it survives the
+    // tiny dmesg buffer. Also IOLog each change.
     if (transition != AirportWCL::TransitionNone) {
-        static uint8_t seen[64][6];
-        static unsigned seenNext = 0;
-        bool logged = false;
-        for (unsigned k = 0; k < 64; ++k)
-            if (memcmp(seen[k], node->ni_bssid, 6) == 0) { logged = true; break; }
-        if (!logged) {
-            memcpy(seen[seenNext++ % 64], node->ni_bssid, 6);
-            char hex[3 * 64 + 1] = {0};
-            for (size_t off = 0; off + 2 <= length; off += size_t(ies[off + 1]) + 2) {
-                if (ies[off] != 48) continue;
-                size_t n = size_t(ies[off + 1]) + 2; if (n > 64) n = 64;
-                for (size_t b = 0; b < n; ++b)
-                    snprintf(hex + 3 * b, 4, "%02x ", ies[off + b]);
-                break;
+        static struct { uint8_t bssid[6]; char line[240]; } table[24];
+        static unsigned used = 0;
+        char hex[3 * 64 + 1] = {0};
+        for (size_t off = 0; off + 2 <= length; off += size_t(ies[off + 1]) + 2) {
+            if (ies[off] != 48) continue;
+            size_t n = size_t(ies[off + 1]) + 2; if (n > 64) n = 64;
+            for (size_t b = 0; b < n; ++b)
+                snprintf(hex + 3 * b, 4, "%02x ", ies[off + b]);
+            break;
+        }
+        char ssid[33] = {0};
+        memcpy(ssid, node->ni_essid, node->ni_esslen > 32 ? 32 : node->ni_esslen);
+        static const char *names[] = {"none", "CONVERTED", "PMF-REQUIRED", "NO-PSK", "MALFORMED"};
+        char line[240];
+        snprintf(line, sizeof(line), "%s %s ch=%u %s rsn=%s", ssid,
+                 ether_sprintf(node->ni_bssid), channel,
+                 names[(transition >= 0 && transition <= 4) ? transition : 0], hex);
+        unsigned k = 0;
+        for (; k < used; ++k)
+            if (memcmp(table[k].bssid, node->ni_bssid, 6) == 0) break;
+        if (k == used) {
+            if (used < 24) used++; else k = 23;
+            memcpy(table[k].bssid, node->ni_bssid, 6);
+            table[k].line[0] = 0;
+        }
+        if (strncmp(table[k].line, line, sizeof(table[k].line)) != 0) {
+            strlcpy(table[k].line, line, sizeof(table[k].line));
+            XYLog("PEM-WPA3 %s\n", line);
+            static char all[24 * 242];
+            all[0] = 0;
+            for (unsigned m = 0; m < used; ++m) {
+                strlcat(all, table[m].line, sizeof(all));
+                strlcat(all, "\n", sizeof(all));
             }
-            char ssid[33] = {0};
-            memcpy(ssid, node->ni_essid, node->ni_esslen > 32 ? 32 : node->ni_esslen);
-            static const char *names[] = {"none", "CONVERTED to WPA2", "PMF REQUIRED (left WPA3)", "NO PSK (left WPA3)", "MALFORMED"};
-            XYLog("PEM-WPA3 ssid=%s bssid=%s ch=%u result=%s rsn=%s\n", ssid,
-                  ether_sprintf(node->ni_bssid), channel,
-                  names[(transition >= 0 && transition <= 4) ? transition : 0], hex);
+            OSString *str = OSString::withCString(all);
+            if (str) { instance->setProperty("PEMWPA3", str); str->release(); }
         }
     }
     size_t messageSize = sizeof(*metadata) + metadata->ieLength;
@@ -450,6 +466,23 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLJoin(apple80211AssocCandidates *r
 IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &join)
 {
     auto auth = AirportWCL::classifyLegacyAuth(join);
+    {
+        // PEM: record what macOS asks for (auth types + RSN it wants to use).
+        char ssid[33] = {0};
+        memcpy(ssid, join.ssid, join.ssidLength > 32 ? 32 : join.ssidLength);
+        char hex[3 * 48 + 1] = {0};
+        size_t n = join.rsnLength > 48 ? 48 : join.rsnLength;
+        for (size_t b = 0; b < n; ++b)
+            snprintf(hex + 3 * b, 4, "%02x ", join.rsn[b]);
+        static const char *authNames[] = {"Invalid", "Open", "Wep", "Personal", "Enterprise"};
+        char line[300];
+        snprintf(line, sizeof(line), "join ssid=%s lower=0x%x upper=0x%x class=%s rsn=%s",
+                 ssid, (unsigned)join.lowerAuth, (unsigned)join.upperAuth,
+                 authNames[(int)auth >= 0 && (int)auth <= 4 ? (int)auth : 0], hex);
+        XYLog("PEM-WPA3 %s\n", line);
+        OSString *str = OSString::withCString(line);
+        if (str) { instance->setProperty("PEMWPA3Join", str); str->release(); }
+    }
     bool personal = auth == AirportWCL::LegacyAuth::Personal;
     bool enterprise = auth == AirportWCL::LegacyAuth::Enterprise;
     bool supported = auth != AirportWCL::LegacyAuth::Invalid;
