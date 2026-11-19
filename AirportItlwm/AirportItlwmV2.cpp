@@ -342,6 +342,22 @@ bool AirportItlwm::start(IOService *provider)
         releaseAll();
         return false;
     }
+    {
+        // PEM: opt-in 802.11w (Protected Management Frames), boot-arg
+        // itlwm_mfp=1. Needed for networks that REQUIRE PMF (RSN MFPR=1),
+        // e.g. WPA2-PSK-SHA256/WPA3 transition networks with 11w=2.
+        // net80211 handles IGTK/BIP and SA Query in software; the iwx HAL
+        // installs the pairwise key with the MFP flag so firmware protects
+        // unicast management frames.
+        int mfp = 0;
+        if (PE_parse_boot_argn("itlwm_mfp", &mfp, sizeof(mfp)) && mfp == 1) {
+            fHalService->get80211Controller()->ic_caps |= IEEE80211_C_MFP;
+            setProperty("PEMMFP", kOSBooleanTrue);
+            XYLog("PEM-MFP: 802.11w enabled by boot-arg\n");
+        } else {
+            setProperty("PEMMFP", kOSBooleanFalse);
+        }
+    }
     fWatchdogWorkLoop = IOWorkLoop::workLoop();
     if (fWatchdogWorkLoop == NULL) {
         XYLog("init watchdog workloop fail\n");

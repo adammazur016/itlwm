@@ -10071,8 +10071,13 @@ iwx_set_key(struct ieee80211com *ic, struct ieee80211_node *ni,
     if (k->k_flags & IEEE80211_KEY_GROUP) {
         cmd.common.key_offset = 1;
         cmd.common.key_flags |= htole16(IWX_STA_KEY_MULTICAST);
-    } else
+    } else {
         cmd.common.key_offset = 0;
+        /* PEM: with 802.11w negotiated, let firmware use the PTK for
+         * unicast robust management frames too (like iwlwifi STA_KEY_MFP). */
+        if (ni && (ni->ni_flags & IEEE80211_NODE_MFP))
+            cmd.common.key_flags |= htole16(IWX_STA_KEY_MFP);
+    }
     
     memcpy(cmd.common.key, k->k_key, MIN(sizeof(cmd.common.key), k->k_len));
     cmd.common.sta_id = IWX_STATION_ID;
