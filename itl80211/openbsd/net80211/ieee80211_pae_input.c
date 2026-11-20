@@ -324,6 +324,8 @@ ieee80211_recv_4way_msg2(struct ieee80211com *ic,
     /* check Key MIC field using KCK */
     if (ieee80211_eapol_key_check_mic(key, tptk.kck) != 0) {
         DPRINTF(("key MIC failed\n"));
+        XYLog("PEM-MFP: EAPOL key MIC FAILED (akm=0x%x desc=%d)\n", ni->ni_rsnakms,
+              BE_READ_2(key->info) & EAPOL_KEY_VERSION_MASK);
         ic->ic_stats.is_rx_eapol_badmic++;
         return;    /* will timeout.. */
     }
@@ -424,6 +426,8 @@ ieee80211_recv_4way_msg3(struct ieee80211com *ic,
     /* check Key MIC field using KCK */
     if (ieee80211_eapol_key_check_mic(key, tptk.kck) != 0) {
         DPRINTF(("key MIC failed\n"));
+        XYLog("PEM-MFP: EAPOL key MIC FAILED (akm=0x%x desc=%d)\n", ni->ni_rsnakms,
+              BE_READ_2(key->info) & EAPOL_KEY_VERSION_MASK);
         ic->ic_stats.is_rx_eapol_badmic++;
         return;
     }
@@ -638,6 +642,8 @@ ieee80211_recv_4way_msg3(struct ieee80211com *ic,
             }
         }
     }
+    XYLog("PEM-MFP: msg3 ok, gtk=%d igtk=%d nodemfp=%d\n", gtk != NULL, igtk != NULL,
+          (ni->ni_flags & IEEE80211_NODE_MFP) ? 1 : 0);
     if (igtk != NULL) {    /* implies MFP && gtk != NULL */
         u_int16_t kid;
         
@@ -698,6 +704,7 @@ ieee80211_recv_4way_msg3(struct ieee80211com *ic,
     }
 deauth:
     if (reason != 0) {
+        XYLog("PEM-MFP: 4-way msg3 rejected, sending deauth reason %d\n", reason);
         IEEE80211_SEND_MGMT(ic, ni, IEEE80211_FC0_SUBTYPE_DEAUTH,
                             reason);
         ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
@@ -728,6 +735,8 @@ ieee80211_recv_4way_msg4(struct ieee80211com *ic,
     /* check Key MIC field using KCK */
     if (ieee80211_eapol_key_check_mic(key, ni->ni_ptk.kck) != 0) {
         DPRINTF(("key MIC failed\n"));
+        XYLog("PEM-MFP: EAPOL key MIC FAILED (akm=0x%x desc=%d)\n", ni->ni_rsnakms,
+              BE_READ_2(key->info) & EAPOL_KEY_VERSION_MASK);
         ic->ic_stats.is_rx_eapol_badmic++;
         return;    /* will timeout.. */
     }
@@ -858,6 +867,8 @@ ieee80211_recv_rsn_group_msg1(struct ieee80211com *ic,
     /* check Key MIC field using KCK */
     if (ieee80211_eapol_key_check_mic(key, ni->ni_ptk.kck) != 0) {
         DPRINTF(("key MIC failed\n"));
+        XYLog("PEM-MFP: EAPOL key MIC FAILED (akm=0x%x desc=%d)\n", ni->ni_rsnakms,
+              BE_READ_2(key->info) & EAPOL_KEY_VERSION_MASK);
         ic->ic_stats.is_rx_eapol_badmic++;
         return;
     }
@@ -1025,6 +1036,8 @@ ieee80211_recv_wpa_group_msg1(struct ieee80211com *ic,
     /* check Key MIC field using KCK */
     if (ieee80211_eapol_key_check_mic(key, ni->ni_ptk.kck) != 0) {
         DPRINTF(("key MIC failed\n"));
+        XYLog("PEM-MFP: EAPOL key MIC FAILED (akm=0x%x desc=%d)\n", ni->ni_rsnakms,
+              BE_READ_2(key->info) & EAPOL_KEY_VERSION_MASK);
         ic->ic_stats.is_rx_eapol_badmic++;
         return;
     }
@@ -1126,6 +1139,8 @@ ieee80211_recv_group_msg2(struct ieee80211com *ic,
     /* check Key MIC field using KCK */
     if (ieee80211_eapol_key_check_mic(key, ni->ni_ptk.kck) != 0) {
         DPRINTF(("key MIC failed\n"));
+        XYLog("PEM-MFP: EAPOL key MIC FAILED (akm=0x%x desc=%d)\n", ni->ni_rsnakms,
+              BE_READ_2(key->info) & EAPOL_KEY_VERSION_MASK);
         ic->ic_stats.is_rx_eapol_badmic++;
         return;
     }

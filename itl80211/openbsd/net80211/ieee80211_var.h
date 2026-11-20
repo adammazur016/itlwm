@@ -581,6 +581,7 @@ struct ieee80211com {
     uint8_t ic_ppe_thres[IEEE80211_HE_PPE_THRES_MAX_LEN]; /* Holds the PPE Thresholds data. */
     
 	TAILQ_HEAD(, ieee80211_ess)	 ic_ess;
+	u_int32_t	ic_pem_flags;	/* PEM: 802.11w test knobs (itlwm_mfp) */
 };
 #define	ic_if		ic_ac.ac_if
 #define	ic_softc	ic_if.if_softc
@@ -669,6 +670,14 @@ struct ieee80211_ess {
 #define IEEE80211_C_QOS		0x00000800	/* CAPABILITY: QoS avail */
 #define IEEE80211_C_RSN		0x00001000	/* CAPABILITY: RSN avail */
 #define IEEE80211_C_MFP		0x00002000	/* CAPABILITY: MFP avail */
+/* PEM: itlwm_mfp boot-arg bits (ic_pem_flags) */
+#define IEEE80211_PEM_MFP_KEYFLAG	0x1	/* install PTK with fw MFP flag */
+#define IEEE80211_PEM_MFP_REQONLY	0x2	/* use MFP only when AP requires it */
+#define IEEE80211_PEM_NOSHA256		0x4	/* never pick SHA256-PSK if PSK offered */
+#define IEEE80211_MFP_WANTED(ic, ni)					\
+	(((ic)->ic_caps & IEEE80211_C_MFP) &&				\
+	 (!((ic)->ic_pem_flags & IEEE80211_PEM_MFP_REQONLY) ||		\
+	  ((ni)->ni_rsncaps & IEEE80211_RSNCAP_MFPR)))
 #define IEEE80211_C_RAWCTL	0x00004000	/* CAPABILITY: raw ctl */
 #define IEEE80211_C_SCANALLBAND	0x00008000	/* CAPABILITY: scan all bands */
 #define IEEE80211_C_TX_AMPDU	0x00010000	/* CAPABILITY: send A-MPDU */

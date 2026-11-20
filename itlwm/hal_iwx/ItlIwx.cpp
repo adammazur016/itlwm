@@ -10059,7 +10059,10 @@ iwx_set_key(struct ieee80211com *ic, struct ieee80211_node *ni,
     
     if (k->k_cipher != IEEE80211_CIPHER_CCMP) {
         /* Fallback to software crypto for other ciphers. */
-        return (ieee80211_set_key(ic, ni, k));
+        int serr = ieee80211_set_key(ic, ni, k);
+        XYLog("PEM-MFP: sw set_key id=%d cipher=%d igtk=%d err=%d\n", k->k_id,
+              k->k_cipher, (k->k_flags & IEEE80211_KEY_IGTK) ? 1 : 0, serr);
+        return serr;
     }
     
     memset(&cmd, 0, sizeof(cmd));
@@ -10075,7 +10078,8 @@ iwx_set_key(struct ieee80211com *ic, struct ieee80211_node *ni,
         cmd.common.key_offset = 0;
         /* PEM: with 802.11w negotiated, let firmware use the PTK for
          * unicast robust management frames too (like iwlwifi STA_KEY_MFP). */
-        if (ni && (ni->ni_flags & IEEE80211_NODE_MFP))
+        if (ni && (ni->ni_flags & IEEE80211_NODE_MFP) &&
+            (ic->ic_pem_flags & IEEE80211_PEM_MFP_KEYFLAG))
             cmd.common.key_flags |= htole16(IWX_STA_KEY_MFP);
     }
     
@@ -10084,8 +10088,15 @@ iwx_set_key(struct ieee80211com *ic, struct ieee80211_node *ni,
     
     cmd.transmit_seq_cnt = htole64(k->k_tsc);
     
-    return that->iwx_send_cmd_pdu(sc, IWX_ADD_STA_KEY, IWX_CMD_ASYNC,
-                            sizeof(cmd), &cmd);
+    {
+        int err = that->iwx_send_cmd_pdu(sc, IWX_ADD_STA_KEY, IWX_CMD_ASYNC,
+                                         sizeof(cmd), &cmd);
+        XYLog("PEM-MFP: hw set_key id=%d group=%d flags=0x%04x nodemfp=%d err=%d\n",
+              k->k_id, (k->k_flags & IEEE80211_KEY_GROUP) ? 1 : 0,
+              le16toh(cmd.common.key_flags),
+              (ni && (ni->ni_flags & IEEE80211_NODE_MFP)) ? 1 : 0, err);
+        return err;
+    }
 }
 
 void ItlIwx::

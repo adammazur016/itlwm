@@ -1598,7 +1598,8 @@ ieee80211_choose_rsnparams(struct ieee80211com *ic)
     if ((ic->ic_flags & IEEE80211_F_PSK) && (ni->ni_rsnakms &
                                              (IEEE80211_AKM_PSK | IEEE80211_AKM_SHA256_PSK))) {
         /* AP supports PSK AKMP and a PSK is configured */
-        if ((ni->ni_rsnakms & IEEE80211_AKM_SHA256_PSK) && (ic->ic_caps & IEEE80211_C_MFP))
+        if ((ni->ni_rsnakms & IEEE80211_AKM_SHA256_PSK) && IEEE80211_MFP_WANTED(ic, ni) &&
+            !((ic->ic_pem_flags & IEEE80211_PEM_NOSHA256) && (ni->ni_rsnakms & IEEE80211_AKM_PSK)))
             ni->ni_rsnakms = IEEE80211_AKM_SHA256_PSK;
         else if (ni->ni_rsnakms & IEEE80211_AKM_PSK)
             ni->ni_rsnakms = IEEE80211_AKM_PSK;
@@ -1628,9 +1629,13 @@ ieee80211_choose_rsnparams(struct ieee80211com *ic)
     ni->ni_rsncipher = (enum ieee80211_cipher)ni->ni_rsnciphers;
     
     /* use MFP if we both support it */
-    if ((ic->ic_caps & IEEE80211_C_MFP) &&
+    if (IEEE80211_MFP_WANTED(ic, ni) &&
         (ni->ni_rsncaps & IEEE80211_RSNCAP_MFPC))
         ni->ni_flags |= IEEE80211_NODE_MFP;
+    XYLog("PEM-MFP: rsnparams ssid=%.*s akm=0x%x cipher=0x%x apcaps=0x%04x mfp=%d pemflags=0x%x cap=%d\n",
+          (int)ni->ni_esslen, ni->ni_essid, ni->ni_rsnakms, ni->ni_rsncipher,
+          ni->ni_rsncaps, (ni->ni_flags & IEEE80211_NODE_MFP) ? 1 : 0,
+          ic->ic_pem_flags, (ic->ic_caps & IEEE80211_C_MFP) ? 1 : 0);
 }
 
 int

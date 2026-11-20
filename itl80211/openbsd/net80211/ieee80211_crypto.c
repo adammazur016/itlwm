@@ -422,9 +422,26 @@ ieee80211_derive_ptk(enum ieee80211_akm akm, const u_int8_t *pmk,
     memcpy(&buf[12], ret ? anonce : snonce, EAPOL_KEY_NONCE_LEN);
     memcpy(&buf[44], ret ? snonce : anonce, EAPOL_KEY_NONCE_LEN);
 
-    kdf = ieee80211_is_sha256_akm(akm) ? ieee80211_kdf : ieee80211_prf;
-    (*kdf)(pmk, IEEE80211_PMK_LEN, (const u_int8_t *)"Pairwise key expansion", 23,
-        buf, sizeof buf, (u_int8_t *)ptk, sizeof(*ptk));
+    if (ieee80211_is_sha256_akm(akm)) {
+        /*
+         * PEM: IEEE 802.11 12.7.1.7.2 / wpa_supplicant sha256_prf_bits():
+         * the KDF label carries no NUL terminator (22 octets, unlike the
+         * SHA-1 PRF where the 0x00 separator is part of the input), and
+         * Length is the real PTK size in bits: KCK(128)+KEK(128)+TK(128)
+         * = 384 for CCMP-128. The KDF output depends on Length, so the old
+         * 512-bit request produced a completely different PTK and every
+         * SHA256-PSK (AKM 6) handshake failed its MIC check.
+         */
+        memset(ptk, 0, sizeof(*ptk));
+        ieee80211_kdf(pmk, IEEE80211_PMK_LEN,
+            (const u_int8_t *)"Pairwise key expansion", 22,
+            buf, sizeof buf, (u_int8_t *)ptk, 16 + 16 + 16);
+        XYLog("PEM-MFP: PTK derived with SHA256 KDF (384 bits)\n");
+    } else {
+        kdf = ieee80211_prf;
+        (*kdf)(pmk, IEEE80211_PMK_LEN, (const u_int8_t *)"Pairwise key expansion", 23,
+            buf, sizeof buf, (u_int8_t *)ptk, sizeof(*ptk));
+    }
 }
 
 static void

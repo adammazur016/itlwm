@@ -350,12 +350,19 @@ bool AirportItlwm::start(IOService *provider)
         // installs the pairwise key with the MFP flag so firmware protects
         // unicast management frames.
         int mfp = 0;
-        if (PE_parse_boot_argn("itlwm_mfp", &mfp, sizeof(mfp)) && mfp == 1) {
-            fHalService->get80211Controller()->ic_caps |= IEEE80211_C_MFP;
-            setProperty("PEMMFP", kOSBooleanTrue);
-            XYLog("PEM-MFP: 802.11w enabled by boot-arg\n");
+        struct ieee80211com *pic = fHalService->get80211Controller();
+        pic->ic_pem_flags = 0;
+        if (PE_parse_boot_argn("itlwm_mfp", &mfp, sizeof(mfp)) && (mfp & 1)) {
+            // bit0: enable 802.11w; bit1 (2): PTK with fw MFP key flag;
+            // bit2 (4): only when AP requires PMF; bit3 (8): avoid SHA256-PSK
+            pic->ic_caps |= IEEE80211_C_MFP;
+            if (mfp & 2) pic->ic_pem_flags |= IEEE80211_PEM_MFP_KEYFLAG;
+            if (mfp & 4) pic->ic_pem_flags |= IEEE80211_PEM_MFP_REQONLY;
+            if (mfp & 8) pic->ic_pem_flags |= IEEE80211_PEM_NOSHA256;
+            setProperty("PEMMFP", (unsigned long long)mfp, 32);
+            XYLog("PEM-MFP: 802.11w enabled by boot-arg itlwm_mfp=%d\n", mfp);
         } else {
-            setProperty("PEMMFP", kOSBooleanFalse);
+            setProperty("PEMMFP", 0ULL, 32);
         }
     }
     fWatchdogWorkLoop = IOWorkLoop::workLoop();
