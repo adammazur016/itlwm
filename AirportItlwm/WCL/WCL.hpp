@@ -456,8 +456,14 @@ inline size_t selectWPA2TransitionMode(uint8_t *ies, size_t length, int *result 
     }
     return length;
 }
+// PEM-HIDDEN: select the (directed) SSID for every channel of an active scan, also
+// passive-only / DFS ones. The scan config sets IWX_CHANNEL_FLAG_PRE_SCAN_PASSIVE2ACTIVE,
+// so the firmware stays passive there until it hears a beacon (same as Linux iwlwifi,
+// which always passes the SSID bitmap). Without this, hidden networks on such channels -
+// e.g. an iPhone Instant Hotspot on 5 GHz - are never probed and never found.
 inline bool probeChannel(bool active, bool passiveOnly, bool dfs) {
-    return active && !passiveOnly && !dfs;
+    (void)passiveOnly; (void)dfs;
+    return active;
 }
 
 struct ScanRequest {
