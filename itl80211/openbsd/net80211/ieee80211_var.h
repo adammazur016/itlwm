@@ -584,10 +584,11 @@ struct ieee80211com {
 	u_int32_t	ic_pem_flags;	/* PEM: 802.11w test knobs (itlwm_mfp) */
 	char		ic_pem_scaninfo[256];	/* PEM: last WCL scan channel plan (diag) */
 	/* PEM-5G diag: what the BSS sends between WCL join and port-valid */
-	char		ic_pem_rx[48][100];
+	char		ic_pem_rx[48][128];
 	u_int32_t	ic_pem_rx_n, ic_pem_rx_drop, ic_pem_rx_all, ic_pem_rx_bcn, ic_pem_rx_crc;
 	u_int64_t	ic_pem_rx_t0;
 	int		ic_pem_rx_on;
+	int		ic_pem_promisc;	/* PEM-5G diag: firmware MAC filter is promiscuous */
 	char		ic_pem_rx_ssid[33];
 	struct ieee80211_stats	ic_pem_stats0;
 };

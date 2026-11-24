@@ -22,7 +22,7 @@ static void pemPublishRx(IOService *svc, ieee80211com *ic, const char *why)
 {
     if (!svc || !ic || !ic->ic_pem_rx_on)
         return;
-    static char out[48 * 102 + 1024];
+    static char out[48 * 132 + 1024];
     char hdr[512];
     snprintf(hdr, sizeof(hdr), "%s t=%u n=%u lost=%u fromBSS=%u bcn=%u crc=%u st:",
              why, (unsigned)(airport_up_time() - ic->ic_pem_rx_t0), ic->ic_pem_rx_n,
@@ -954,6 +954,9 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                     bn->ni_chan ? ieee80211_chan2ieee(ic, bn->ni_chan) : 0, bn->ni_chw, bn->ni_htop0,
                     bn->ni_vht_chanwidth, bn->ni_vht_chan1, bn->ni_vht_chan2, bn->ni_flags,
                     bn->ni_rsncaps, bn->ni_intval, bn->ni_associd);
+                PEM_RXLOG(ic, "CAPS me=%s ap-ht=%04x my-ht=%04x ap-vht=%08x my-vht=%08x he-req=%d",
+                    ether_sprintf(ic->ic_myaddr), bn->ni_htcaps, ic->ic_htcaps,
+                    bn->ni_vhtcaps, ic->ic_vhtcaps, (int)bn->ni_he_requested);
             }
             if (joinPending && !assocNotified) {
                 AirportWCL::AssociationEvent event = {};

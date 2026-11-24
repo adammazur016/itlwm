@@ -5843,13 +5843,22 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
         desc_size = IWX_RX_DESC_SIZE_V1;
     
 #ifdef AIRPORT_WCL
-    // PEM-5G diag: record every frame the BSS sends us between join and port-valid
-    if (ic->ic_pem_rx_on && ic->ic_bss && ic->ic_state >= IEEE80211_S_AUTH &&
-        !ic->ic_bss->ni_port_valid && maxlen > desc_size) {
+    // PEM-5G diag: record every frame the BSS sends between join and port-valid;
+    // with the promiscuous MAC filter also frames to other addresses and control frames.
+    if (maxlen > desc_size && (ic->ic_pem_promisc ||
+        (ic->ic_pem_rx_on && ic->ic_bss && ic->ic_state >= IEEE80211_S_AUTH &&
+         !ic->ic_bss->ni_port_valid))) {
         uint32_t pl = le16toh(desc->mpdu_len);
-        if (pl >= 16 && pl <= maxlen - desc_size) {
-            const uint8_t *pf = (const uint8_t *)pktdata + desc_size;
-            if (IEEE80211_ADDR_EQ(pf + 10, ic->ic_bss->ni_macaddr)) {
+        const uint8_t *pf = (const uint8_t *)pktdata + desc_size;
+        if (pl >= 10 && pl <= maxlen - desc_size) {
+            uint8_t ftype = pf[0] & 0x0c;
+            bool toMe = IEEE80211_ADDR_EQ(pf + 4, ic->ic_myaddr);
+            bool toGrp = (pf[4] & 1) != 0;
+            bool fromBss = pl >= 16 && ic->ic_bss &&
+                IEEE80211_ADDR_EQ(pf + 10, ic->ic_bss->ni_macaddr);
+            bool window = ic->ic_pem_rx_on && ic->ic_bss &&
+                ic->ic_state >= IEEE80211_S_AUTH && !ic->ic_bss->ni_port_valid;
+            if (window && fromBss) {
                 uint16_t pst = le16toh(desc->status);
                 uint32_t prate = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
                     le32toh(desc->v3.rate_n_flags) : le32toh(desc->v1.rate_n_flags);
@@ -5862,11 +5871,17 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
                     unsigned reason = 0;
                     if (((pf[0] & 0xfc) == 0xc0 || (pf[0] & 0xfc) == 0xa0) && pl >= 26)
                         reason = pf[24] | (pf[25] << 8);
-                    PEM_RXLOG(ic, "RX fc=%02x%02x len=%u st=%04x rate=%08x%s%s r=%u",
-                        pf[0], pf[1], pl, pst, prate,
+                    PEM_RXLOG(ic, "RX fc=%02x%02x to=%s:%02x%02x len=%u st=%04x rate=%08x%s%s r=%u",
+                        pf[0], pf[1], toMe ? "me" : (toGrp ? "grp" : "OTH"), pf[8], pf[9],
+                        pl, pst, prate,
                         (pst & IWX_RX_MPDU_RES_STATUS_CRC_OK) ? "" : " CRC",
                         (pst & IWX_RX_MPDU_RES_STATUS_OVERRUN_OK) ? "" : " OVR", reason);
                 }
+            }
+            if (ic->ic_pem_promisc &&
+                (ftype == 0x04 || (ftype != 0x0c && !toMe && !toGrp))) {
+                mbuf_freem(m);
+                return; /* diag-only frame, never passed up */
             }
         }
     }
@@ -8885,6 +8900,9 @@ iwx_mac_ctxt_cmd(struct iwx_softc *sc, struct iwx_node *in, uint32_t action,
     iwx_mac_ctxt_cmd_common(sc, in, &cmd, action);
 
     if (action == IWX_FW_CTXT_ACTION_REMOVE) {
+#ifdef AIRPORT_WCL
+        ic->ic_pem_promisc = 0;
+#endif
         return iwx_send_cmd_pdu(sc, IWX_MAC_CONTEXT_CMD, 0,
                                 sizeof(cmd), &cmd);
     }
@@ -8908,6 +8926,25 @@ iwx_mac_ctxt_cmd(struct iwx_softc *sc, struct iwx_node *in, uint32_t action,
     if (ni->ni_flags & IEEE80211_NODE_HE) {
         cmd.filter_flags |= htole32(IWX_MAC_FILTER_IN_11AX);
     }
+    
+#ifdef AIRPORT_WCL
+    /*
+     * PEM-5G diag: while joining a hotspot-style BSS (locally administered
+     * BSSID, e.g. an iPhone) let the firmware pass every data, control and
+     * management frame, so we can see whether the AP sends EAPOL msg 1/4 at
+     * all and to which address. Foreign data and all control frames are
+     * logged and dropped in iwx_rx_mpdu_mq, never passed up the stack.
+     */
+    ic->ic_pem_promisc = 0;
+    if (ic->ic_opmode == IEEE80211_M_STA && ic->ic_pem_rx_on &&
+        (ni->ni_bssid[0] & 0x02)) {
+        cmd.filter_flags |= htole32(IWX_MAC_FILTER_IN_PROMISC |
+                                    IWX_MAC_FILTER_IN_CONTROL_AND_MGMT);
+        ic->ic_pem_promisc = 1;
+        PEM_RXLOG(ic, "MACCTX promisc assoc=%d filt=%08x", assoc, le32toh(cmd.filter_flags));
+    } else if (ic->ic_pem_rx_on)
+        PEM_RXLOG(ic, "MACCTX assoc=%d filt=%08x", assoc, le32toh(cmd.filter_flags));
+#endif
     
     return iwx_send_cmd_pdu(sc, IWX_MAC_CONTEXT_CMD, 0, sizeof(cmd), &cmd);
 }
