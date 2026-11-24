@@ -237,6 +237,18 @@ IOReturn AirportItlwmSkywalkInterface::setWCL_LEAVE_NETWORK(apple80211_leave_net
 IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *request)
 {
     AirportWCL::ScanRequest scan;
+    // PEM-SCANDUMP: keep the raw scan requests from macOS (ring of 8) to locate the SSID list
+    {
+        static uint32_t pemScanSeq = 0;
+        if (request) {
+            char key[24];
+            snprintf(key, sizeof(key), "PEMScanReq%u", pemScanSeq % 8);
+            OSData *d = OSData::withBytes(request, 0x1550);
+            if (d) { instance->setProperty(key, d); d->release(); }
+            instance->setProperty("PEMScanSeq", (unsigned long long)pemScanSeq, 32);
+            pemScanSeq++;
+        }
+    }
     if (!AirportWCL::decodeScan(request, 0x1550, scan))
         return kIOReturnBadArgument;
     ieee80211com *ic = fHalService->get80211Controller();
