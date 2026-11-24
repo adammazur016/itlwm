@@ -336,6 +336,7 @@ ieee80211_send_4way_msg2(struct ieee80211com *ic, struct ieee80211_node *ni,
                          const u_int8_t *replaycnt, const struct ieee80211_ptk *tptk)
 {
     XYLog("%s\n", __FUNCTION__);
+    PEM_RXLOG(ic, "M2 send");
     struct ieee80211_eapol_key *key;
     mbuf_t m;
     u_int16_t info;

@@ -98,6 +98,7 @@ ieee80211_eapol_key_input(struct ieee80211com *ic, mbuf_t m,
     int totlen, bodylen, paylen;
     
     ifp->if_ibytes += mbuf_pkthdr_len(m);
+    PEM_RXLOG(ic, "EAPOL in len=%u", (unsigned)mbuf_pkthdr_len(m));
     
     eh = mtod(m, struct ether_header *);
     if (IEEE80211_IS_MULTICAST(eh->ether_dhost)) {

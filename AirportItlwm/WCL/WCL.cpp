@@ -15,6 +15,42 @@
 #include <net80211/ieee80211_ioctl.h>
 #include <net80211/ieee80211_priv.h>
 
+// PEM-5G diag: publish what the BSS sent between WCL join and port-valid as
+// IORegistry "PEMRx-<ssid>" (one property per SSID, so a later rejoin of
+// another network does not overwrite the failed attempt).
+static void pemPublishRx(IOService *svc, ieee80211com *ic, const char *why)
+{
+    if (!svc || !ic || !ic->ic_pem_rx_on)
+        return;
+    static char out[48 * 102 + 1024];
+    char hdr[512];
+    snprintf(hdr, sizeof(hdr), "%s t=%u n=%u lost=%u fromBSS=%u bcn=%u crc=%u st:",
+             why, (unsigned)(airport_up_time() - ic->ic_pem_rx_t0), ic->ic_pem_rx_n,
+             ic->ic_pem_rx_drop, ic->ic_pem_rx_all, ic->ic_pem_rx_bcn, ic->ic_pem_rx_crc);
+    strlcpy(out, hdr, sizeof(out));
+    const u_int32_t *a = (const u_int32_t *)&ic->ic_stats;
+    const u_int32_t *b = (const u_int32_t *)&ic->ic_pem_stats0;
+    for (unsigned i = 0; i < sizeof(ic->ic_stats) / sizeof(u_int32_t); i++) {
+        if (a[i] != b[i]) {
+            char t[24];
+            snprintf(t, sizeof(t), " s%u+%u", i, a[i] - b[i]);
+            strlcat(out, t, sizeof(out));
+        }
+    }
+    for (unsigned i = 0; i < ic->ic_pem_rx_n && i < 48; i++) {
+        strlcat(out, " | ", sizeof(out));
+        strlcat(out, ic->ic_pem_rx[i], sizeof(out));
+    }
+    char key[48] = "PEMRx-";
+    size_t k = strlen(key);
+    for (const char *c = ic->ic_pem_rx_ssid; *c && k < sizeof(key) - 1; c++)
+        key[k++] = ((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9')) ? *c : '_';
+    key[k] = 0;
+    OSString *str = OSString::withCString(out);
+    if (str) { svc->setProperty(key, str); str->release(); }
+    ic->ic_pem_rx_on = 0;
+}
+
 extern IOCommandGate *_fCommandGate;
 
 struct AirportItlwmSkywalkInterface::CountryUpdate {
@@ -585,6 +621,16 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
     memcpy(ic->ic_des_bssid, join.bssid, 6);
     memcpy(joinBSSID, join.bssid, 6);
     ic->ic_flags |= IEEE80211_F_DESBSSID;
+    // PEM-5G diag: start recording for this join
+    pemPublishRx(instance, ic, "superseded");
+    ic->ic_pem_rx_n = ic->ic_pem_rx_drop = ic->ic_pem_rx_all = 0;
+    ic->ic_pem_rx_bcn = ic->ic_pem_rx_crc = 0;
+    ic->ic_pem_rx_t0 = airport_up_time();
+    bzero(ic->ic_pem_rx_ssid, sizeof(ic->ic_pem_rx_ssid));
+    memcpy(ic->ic_pem_rx_ssid, join.ssid, join.ssidLength > 32 ? 32 : join.ssidLength);
+    ic->ic_pem_stats0 = ic->ic_stats;
+    ic->ic_pem_rx_on = 1;
+    PEM_RXLOG(ic, "JOIN %s bssid=%s", ic->ic_pem_rx_ssid, ether_sprintf(join.bssid));
     ic->ic_wcl_join_requested = true;
     ic->ic_wcl_scan_requested = false;
     current_authtype_lower = join.lowerAuth;
@@ -662,6 +708,8 @@ void AirportItlwmSkywalkInterface::wclJoinTimeout(OSObject *owner, IOTimerEventS
 IOReturn AirportItlwmSkywalkInterface::leaveWCLNetwork()
 {
     ieee80211com *ic = fHalService->get80211Controller();
+    PEM_RXLOG(ic, "LEAVE state=%d", ic->ic_state);
+    pemPublishRx(instance, ic, "leave");
     portAuthorized = false;
     updateWCLLinkQuality(true);
     joinPending = false;
@@ -698,6 +746,11 @@ void AirportItlwmSkywalkInterface::handleWCLLink(bool up)
     if (wclStopping)
         return;
     portAuthorized = up;
+    if (up) {
+        ieee80211com *pic = fHalService->get80211Controller();
+        PEM_RXLOG(pic, "PORT UP");
+        pemPublishRx(instance, pic, "ok");
+    }
     if (!up && wclLinkIndicated) {
         AirportWCL::LinkStatusEvent event = {};
         memcpy(event.bssid, joinBSSID, sizeof(event.bssid));
@@ -894,6 +947,14 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
             }
             break;
         case IEEE80211_EVT_STA_ASSOC_DONE:
+            if (ic->ic_bss) {
+                ieee80211_node *bn = ic->ic_bss;
+                PEM_RXLOG(ic, "ASSOC st=%u %s ch=%u chw=%u htop0=%02x vhtw=%u vc1=%u vc2=%u fl=%x rsncaps=%x int=%u aid=%u",
+                    ic->ic_assoc_status, ether_sprintf(bn->ni_bssid),
+                    bn->ni_chan ? ieee80211_chan2ieee(ic, bn->ni_chan) : 0, bn->ni_chw, bn->ni_htop0,
+                    bn->ni_vht_chanwidth, bn->ni_vht_chan1, bn->ni_vht_chan2, bn->ni_flags,
+                    bn->ni_rsncaps, bn->ni_intval, bn->ni_associd);
+            }
             if (joinPending && !assocNotified) {
                 AirportWCL::AssociationEvent event = {};
                 event.status = ic->ic_assoc_status;
@@ -906,6 +967,8 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
             }
             break;
         case IEEE80211_EVT_STA_DEAUTH: {
+            PEM_RXLOG(ic, "DEAUTH-EVT reason=%u", ic->ic_deauth_reason);
+            pemPublishRx(instance, ic, "deauth");
             portAuthorized = false;
             updateWCLLinkQuality(true);
             AirportWCL::DeauthEvent event = {};

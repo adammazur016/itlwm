@@ -5842,6 +5842,36 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
     else
         desc_size = IWX_RX_DESC_SIZE_V1;
     
+#ifdef AIRPORT_WCL
+    // PEM-5G diag: record every frame the BSS sends us between join and port-valid
+    if (ic->ic_pem_rx_on && ic->ic_bss && ic->ic_state >= IEEE80211_S_AUTH &&
+        !ic->ic_bss->ni_port_valid && maxlen > desc_size) {
+        uint32_t pl = le16toh(desc->mpdu_len);
+        if (pl >= 16 && pl <= maxlen - desc_size) {
+            const uint8_t *pf = (const uint8_t *)pktdata + desc_size;
+            if (IEEE80211_ADDR_EQ(pf + 10, ic->ic_bss->ni_macaddr)) {
+                uint16_t pst = le16toh(desc->status);
+                uint32_t prate = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210 ?
+                    le32toh(desc->v3.rate_n_flags) : le32toh(desc->v1.rate_n_flags);
+                ic->ic_pem_rx_all++;
+                if (!(pst & IWX_RX_MPDU_RES_STATUS_CRC_OK))
+                    ic->ic_pem_rx_crc++;
+                if ((pf[0] & 0xfc) == 0x80)
+                    ic->ic_pem_rx_bcn++;
+                else {
+                    unsigned reason = 0;
+                    if (((pf[0] & 0xfc) == 0xc0 || (pf[0] & 0xfc) == 0xa0) && pl >= 26)
+                        reason = pf[24] | (pf[25] << 8);
+                    PEM_RXLOG(ic, "RX fc=%02x%02x len=%u st=%04x rate=%08x%s%s r=%u",
+                        pf[0], pf[1], pl, pst, prate,
+                        (pst & IWX_RX_MPDU_RES_STATUS_CRC_OK) ? "" : " CRC",
+                        (pst & IWX_RX_MPDU_RES_STATUS_OVERRUN_OK) ? "" : " OVR", reason);
+                }
+            }
+        }
+    }
+#endif
+    
     if (!(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_CRC_OK)) ||
         !(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_OVERRUN_OK))) {
         mbuf_freem(m);
@@ -5946,11 +5976,15 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
      * verified as part of the CCMP nonce.
      */
     if (iwx_rx_hwdecrypt(sc, m, le16toh(desc->status), &rxi)) {
+        if (ic->ic_state >= IEEE80211_S_AUTH)
+            PEM_RXLOG(ic, "drop hwdecrypt st=%04x", le16toh(desc->status));
         mbuf_freem(m);
         return;
     }
     
     if (iwx_detect_duplicate(sc, m, desc, &rxi)) {
+        if (ic->ic_state >= IEEE80211_S_AUTH)
+            PEM_RXLOG(ic, "drop duplicate");
         mbuf_freem(m);
         return;
     }
@@ -5998,6 +6032,10 @@ iwx_rx_tx_cmd_single(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
     KASSERT(tx_resp->frame_count == 1, "tx_resp->frame_count == 1");
     
     txfail = (status != IWX_TX_STATUS_SUCCESS);
+#ifdef AIRPORT_WCL
+    if (ic->ic_bss && !ic->ic_bss->ni_port_valid)
+        PEM_RXLOG(ic, "TX type=%d st=0x%x%s", txd->type, status, txfail ? " FAIL" : "");
+#endif
     
     if (txfail) {
         DPRINTFN(3, ("%s %d OUTPUT_ERROR type=%d status=%d\n", __FUNCTION__, __LINE__, txd->type, status));
