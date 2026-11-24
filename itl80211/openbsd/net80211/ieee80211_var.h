@@ -582,6 +582,7 @@ struct ieee80211com {
     
 	TAILQ_HEAD(, ieee80211_ess)	 ic_ess;
 	u_int32_t	ic_pem_flags;	/* PEM: 802.11w test knobs (itlwm_mfp) */
+	char		ic_pem_scaninfo[256];	/* PEM: last WCL scan channel plan (diag) */
 };
 #define	ic_if		ic_ac.ac_if
 #define	ic_softc	ic_if.if_softc

@@ -776,6 +776,41 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
             auto beacon = static_cast<ieee80211_beacon_event *>(data);
             if (!beacon)
                 break;
+            // PEM-HIDDEN diag: during WCL scans with an SSID, remember frames that are hidden
+            // (empty / zeroed SSID IE) or carry the requested SSID.
+            if (scanPending && ic->ic_wcl_scan_ssid_length && beacon->node && beacon->frame &&
+                beacon->frame_length >= 24 && beacon->ies && beacon->length >= 2 && beacon->ies[0] == 0) {
+                const uint8_t *se = beacon->ies;
+                bool hidden = se[1] == 0;
+                if (!hidden) { hidden = true; for (int z = 0; z < se[1] && 2 + z < (int)beacon->length; z++) if (se[2 + z]) { hidden = false; break; } }
+                bool match = se[1] == ic->ic_wcl_scan_ssid_length && 2 + se[1] <= (int)beacon->length &&
+                    memcmp(se + 2, ic->ic_wcl_scan_ssid, se[1]) == 0;
+                if (hidden || match) {
+                    static struct { uint8_t bssid[6]; uint8_t sub; uint32_t n; char line[120]; } ring[20];
+                    static unsigned ringNext = 0;
+                    uint8_t sub = beacon->frame[0] & 0xfc;
+                    int k = -1;
+                    for (int i = 0; i < 20; i++)
+                        if (ring[i].n && ring[i].sub == sub && memcmp(ring[i].bssid, beacon->node->ni_bssid, 6) == 0) { k = i; break; }
+                    if (k < 0) { k = ringNext; ringNext = (ringNext + 1) % 20; ring[k].n = 0; }
+                    memcpy(ring[k].bssid, beacon->node->ni_bssid, 6);
+                    ring[k].sub = sub;
+                    ring[k].n++;
+                    char ss[33] = {0};
+                    if (match) memcpy(ss, se + 2, se[1]);
+                    snprintf(ring[k].line, sizeof(ring[k].line), "%s %s ch=%u rssi=%d %s n=%u",
+                        sub == 0x50 ? "PROBE_RESP" : (sub == 0x80 ? "BEACON" : "OTHER"),
+                        ether_sprintf(beacon->node->ni_bssid),
+                        beacon->node->ni_chan ? ieee80211_chan2ieee(ic, beacon->node->ni_chan) : 0,
+                        IWM_MIN_DBM + beacon->node->ni_rssi, match ? ss : "<hidden>", ring[k].n);
+                    static char all[20 * 122];
+                    all[0] = 0;
+                    for (int i = 0; i < 20; i++)
+                        if (ring[i].n) { strlcat(all, ring[i].line, sizeof(all)); strlcat(all, " | ", sizeof(all)); }
+                    OSString *str = OSString::withCString(all);
+                    if (str) { instance->setProperty("PEMHidden", str); str->release(); }
+                }
+            }
             // Retain the actual associated beacon, including its advancing TSF.
             // WCL polls BEACON_INFO to distinguish fresh reception from a stale BSS.
             if (assocNotified && (joinPending || portAuthorized) &&
@@ -836,6 +871,19 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
             break;
         }
         case IEEE80211_EVT_SCAN_DONE:
+            if (scanPending && ic->ic_pem_scaninfo[0]) {
+                static char plans[6][256];
+                static unsigned planNext = 0;
+                strlcpy(plans[planNext], ic->ic_pem_scaninfo, sizeof(plans[0]));
+                planNext = (planNext + 1) % 6;
+                ic->ic_pem_scaninfo[0] = 0;
+                static char allp[6 * 260];
+                allp[0] = 0;
+                for (int i = 0; i < 6; i++)
+                    if (plans[i][0]) { strlcat(allp, plans[i], sizeof(allp)); strlcat(allp, " | ", sizeof(allp)); }
+                OSString *str = OSString::withCString(allp);
+                if (str) { instance->setProperty("PEMScanPlan", str); str->release(); }
+            }
             if (scanPending) {
                 if (scanSkipCompletion)
                     scanSkipCompletion = false;

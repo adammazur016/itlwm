@@ -7685,6 +7685,21 @@ iwx_umac_scan_fill_channels(struct iwx_softc *sc,
     struct ieee80211com *ic = &sc->sc_ic;
     struct ieee80211_channel *c;
     uint8_t nchan;
+    // PEM-HIDDEN diag: summary of the channel plan of WCL scans with an SSID
+    char pemInfo[256];
+    size_t pemLen = 0;
+#ifdef AIRPORT_WCL
+    bool pemLog = ic->ic_wcl_scan_requested && ic->ic_wcl_scan_ssid_length;
+#else
+    bool pemLog = false;
+#endif
+    if (pemLog) {
+        char ss[33] = {0};
+#ifdef AIRPORT_WCL
+        memcpy(ss, ic->ic_wcl_scan_ssid, min((int)ic->ic_wcl_scan_ssid_length, 32));
+#endif
+        pemLen = snprintf(pemInfo, sizeof(pemInfo), "ssid=%s act=%d bg=%d mac=%s ch:", ss, n_ssids, bgscan, ether_sprintf(ic->ic_myaddr));
+    }
     
     for (nchan = 0, c = &ic->ic_channels[1];
          c <= &ic->ic_channels[IEEE80211_CHAN_MAX] &&
@@ -7724,10 +7739,19 @@ iwx_umac_scan_fill_channels(struct iwx_softc *sc,
         if (n_ssids != 0 && !bgscan)
 #endif
             chan->flags = htole32(1 << 0); /* select SSID 0 */
+        if (pemLog && pemLen + 8 < sizeof(pemInfo))
+            pemLen += snprintf(pemInfo + pemLen, sizeof(pemInfo) - pemLen, " %u%s%s%s", channel_num,
+                (c->ic_flags & IEEE80211_CHAN_PASSIVE) ? "p" : "",
+                (c->ic_flags & IEEE80211_CHAN_DFS) ? "d" : "",
+                chan->flags ? "+" : "");
         chan++;
         nchan++;
     }
     
+    if (pemLog) {
+        strlcpy(ic->ic_pem_scaninfo, pemInfo, sizeof(ic->ic_pem_scaninfo));
+        XYLog("PEM-HIDDEN scan %s\n", pemInfo);
+    }
     return nchan;
 }
 
